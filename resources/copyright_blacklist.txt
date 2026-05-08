@@ -1,0 +1,17 @@
+// pasbuild-copyright blacklist
+// Patterns are regular expressions matched against the file path.
+// Path separators are normalised to / before matching, so patterns
+// only need to use / regardless of the OS path delimiter (/ or \).
+// Lines starting with // or # are comments and are ignored, as are blank lines.
+
+# Example: ignore all files under a vendor directory
+# vendor/
+
+# Example: ignore generated files in a specific directory
+# src/generated/.*\.pas$
+
+# Example: ignore a single file by exact path
+# src/main/pascal/GeneratedCode\.pas$
+
+# Example: ignore all files in any test/ folder
+# /test/

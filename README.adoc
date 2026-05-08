@@ -100,16 +100,20 @@ src/generated/.*\.pas$
 src/main/pascal/GeneratedCode\.pas$
 ----
 
-== Year range limitation
+== Year handling
 
-WARNING: Do not use a year range such as `Copyright 2022-2026` in your copyright header. The plugin extracts the first four-digit number (≥ 1900) it finds on the copyright line and replaces it with the current year. With a range, it will find and overwrite the start year, producing something like `Copyright 2026-2026` — and eventually `Copyright 2027-2026`.
-
-Use a single year in the header and let the plugin keep it up to date:
+The plugin scans the copyright line from right to left and replaces the rightmost four-digit number (≥ 1900) with the current year. Scanning right-to-left means year ranges work correctly:
 
 [source]
 ----
-Copyright (c) 2026 My Name       ✔
-Copyright (c) 2022-2026 My Name  ✘
+Copyright (c) 2022-2025 My Name  →  Copyright (c) 2022-2026 My Name  ✔
+----
+
+A single year also works as before:
+
+[source]
+----
+Copyright (c) 2025 My Name  →  Copyright (c) 2026 My Name  ✔
 ----
 
 == License

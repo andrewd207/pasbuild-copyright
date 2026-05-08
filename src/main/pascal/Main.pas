@@ -292,7 +292,7 @@ var
 begin
   Result := False;
   AYear := 0;
-  for I := 1 to Length(S) - 3 do
+  for I := Length(S) - 3 downto 1 do
   begin
     T := Copy(S, I, 4);
     if (T[1] in ['0'..'9']) and (T[2] in ['0'..'9']) and
@@ -379,13 +379,13 @@ begin
   end;
 end;
 
-function ReplaceFirstYear(const S: string; NewYear: Integer): string;
+function ReplaceLastYear(const S: string; NewYear: Integer): string;
 var
   I: Integer;
   T: string;
 begin
   Result := S;
-  for I := 1 to Length(S) - 3 do
+  for I := Length(S) - 3 downto 1 do
   begin
     T := Copy(S, I, 4);
     if (T[1] in ['0'..'9']) and (T[2] in ['0'..'9']) and
@@ -441,7 +441,7 @@ begin
       begin
         if Scan.FoundYear then
           Lines[Scan.ExistingCopyrightLineIndex] :=
-            ReplaceFirstYear(Lines[Scan.ExistingCopyrightLineIndex], GCurrentYear);
+            ReplaceLastYear(Lines[Scan.ExistingCopyrightLineIndex], GCurrentYear);
         Lines.SaveToFile(AFileName);
         WriteLn('[INFO] Updated copyright year ', AFileName);
       end;
