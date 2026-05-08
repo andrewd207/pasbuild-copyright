@@ -1,18 +1,19 @@
 {
   pasbuild-copyright - A plugin for pasbuild to help administer copyright
   Copyright (c) 2026 Andrew Haines
- 
+
   SPDX-License-Identifier: BSD-3-Clause
- 
+
   Licensed under the BSD 3-Clause License. See LICENSE file for details.
- }
+}
 
 program main;
 
 {$mode objfpc}{$H+}
 
 uses
-  Classes, SysUtils, StrUtils, RegExpr, Process, Math, DateUtils
+  Classes, SysUtils, StrUtils, DateUtils,
+  UGitUtils, UBlacklist, UCopyrightScanner, ULicenseDetect
   {$IFDEF UNIX}
   , BaseUnix
   {$ENDIF}
@@ -28,24 +29,8 @@ const
   CDefaultInstalledFolder = '/home/$user/.pasbuild/';
   {$ENDIF}
 
-  CScanLineLimit = 20;
-
 type
   TMode = (pmUnknown, pmCheck, pmFix);
-
-  TFileStatus = (fsOk, fsWarning, fsError);
-
-  TFileResult = record
-    FileName: string;
-    Status: TFileStatus;
-    FoundCopyright: Boolean;
-    FoundYear: Boolean;
-    YearValue: Integer;
-    NeedsYearUpdate: Boolean;
-    MissingCopyright: Boolean;
-    OriginalHeaderStyle: string;
-    ExistingCopyrightLineIndex: Integer;
-  end;
 
 var
   GCurrentYear: Integer;
@@ -79,7 +64,7 @@ function ResolveInstalledFolder: string;
 var
   S, UserName: string;
 begin
-  S := IncludeTrailingPathDelimiter(CDefaultInstalledFolder) + 'plugins'+ PathDelim;
+  S := IncludeTrailingPathDelimiter(CDefaultInstalledFolder) + 'plugins' + PathDelim;
   UserName := GetEnvSmart('user');
   if UserName = '' then
     UserName := GetEnvSmart('username');
@@ -144,317 +129,40 @@ begin
   WriteLn('[INFO] Installed ', DstFix);
 end;
 
-function RunGit(const Args: array of string; out OutputText: string; out ExitCode: Integer): Boolean;
+{ Resolves which license applies to AFilePath.
+  Prefers a LICENSE file found directly in the file's own directory.
+  Falls back to ARootLicense when no directory-specific file exists.
+  Sets AHasDirLicense when the directory has its own license file distinct
+  from the root's, so callers can decide whether to emit a mismatch warning. }
+procedure ResolveFileLicense(const AFilePath: string;
+                              const ARootLicFile: string;
+                              ARootLicense: TLicenseType;
+                              out AEffectiveLicense: TLicenseType;
+                              out AHasDirLicense: Boolean);
 var
-  Cmds: TStringArray;
-  I: Integer;
+  FileDir, DirLicFile: string;
+  DirLic: TLicenseType;
 begin
-  SetLength(Cmds, Length(Args));
-  for I := 0 to High(Args) do
-    Cmds[I] := Args[I];
-  Result := RunCommandInDir(GetCurrentDir, 'git', Cmds, OutputText, ExitCode, []) = 0;
-end;
+  FileDir := ExtractFileDir(AFilePath);
+  if FileDir = '' then
+    FileDir := '.';
 
-function IsGitRepo: Boolean;
-var
-  OutText: string;
-  ExitCode: Integer;
-begin
-  Result := RunGit(['rev-parse', '--is-inside-work-tree'], OutText, ExitCode)
-            and (ExitCode = 0)
-            and (Pos('true', LowerCase(Trim(OutText))) > 0);
-end;
+  DirLicFile := FindLicenseFile(FileDir);
 
-function HasStagedChanges: Boolean;
-var
-  OutText: string;
-  ExitCode: Integer;
-begin
-  Result := not RunGit(['diff', '--cached', '--name-only'], OutText, ExitCode)
-            or (ExitCode <> 0)
-            or (Trim(OutText) <> '');
-end;
+  AHasDirLicense := (DirLicFile <> '') and
+                    (ExpandFileName(DirLicFile) <> ExpandFileName(ARootLicFile));
 
-function HasUnstagedChanges: Boolean;
-var
-  OutText: string;
-  ExitCode: Integer;
-begin
-  Result := not RunGit(['diff', '--name-only'], OutText, ExitCode)
-            or (ExitCode <> 0)
-            or (Trim(OutText) <> '');
-end;
-
-function GetTrackedPasFiles(AList: TStrings; var OutText: String): Boolean;
-var
-  ExitCode, I: Integer;
-  Lines: TStringList;
-  S: string;
-begin
-  OutText := '';
-  AList.Clear;
-  Result := RunGit(['ls-files', '*.pas'], OutText, ExitCode) and (ExitCode = 0);
-  if not Result then
-    Exit;
-
-  Lines := TStringList.Create;
-  try
-    Lines.Text := StringReplace(OutText, #13, '', [rfReplaceAll]);
-    for I := 0 to Lines.Count - 1 do
-    begin
-      S := Trim(Lines[I]);
-      if S <> '' then
-        AList.Add(S);
-    end;
-  finally
-    Lines.Free;
-  end;
-end;
-
-function LoadBlacklist(const AFileName: string): TStringList;
-var
-  Lines: TStringList;
-  I: Integer;
-  S: string;
-begin
-  Result := TStringList.Create;
-  if not FileExists(AFileName) then
-    Exit;
-  Lines := TStringList.Create;
-  try
-    Lines.LoadFromFile(AFileName);
-    for I := 0 to Lines.Count - 1 do
-    begin
-      S := Trim(Lines[I]);
-      if (S = '') or (Copy(S, 1, 2) = '//') or (S[1] = '#') then
-        Continue;
-      Result.Add(S);
-    end;
-  finally
-    Lines.Free;
-  end;
-end;
-
-function NormalizePathSeps(const APath: string): string;
-begin
-  Result := StringReplace(APath, '\', '/', [rfReplaceAll]);
-end;
-
-function IsBlacklisted(const AFileName: string; ABlacklist: TStrings): Boolean;
-var
-  I: Integer;
-  Re: TRegExpr;
-begin
-  Result := False;
-  if ABlacklist.Count = 0 then
-    Exit;
-  Re := TRegExpr.Create;
-  try
-    for I := 0 to ABlacklist.Count - 1 do
-    begin
-      Re.Expression := ABlacklist[I];
-      try
-        if Re.Exec(NormalizePathSeps(AFileName)) then
-          Exit(True);
-      except
-        on E: ERegExpr do
-          WriteLn('[WARNING] Invalid blacklist regex: ', ABlacklist[I], ' — ', E.Message);
-      end;
-    end;
-  finally
-    Re.Free;
-  end;
-end;
-
-procedure FilterBlacklisted(AFiles: TStrings; ABlacklist: TStrings);
-var
-  I: Integer;
-begin
-  for I := AFiles.Count - 1 downto 0 do
-    if IsBlacklisted(AFiles[I], ABlacklist) then
-    begin
-      WriteLn('[INFO] Skipping blacklisted file: ', AFiles[I]);
-      AFiles.Delete(I);
-    end;
-end;
-
-function ResolveBlacklistFile: string;
-begin
-  Result := GetEnvironmentVariable('PASBUILD_COPYRIGHT_BLACKLIST');
-  if Result = '' then
-    Result := 'resources' + PathDelim + 'copyright_blacklist.txt';
-end;
-
-function ExtractYear(const S: string; out AYear: Integer): Boolean;
-var
-  I: Integer;
-  T: string;
-begin
-  Result := False;
-  AYear := 0;
-  for I := Length(S) - 3 downto 1 do
+  if AHasDirLicense then
   begin
-    T := Copy(S, I, 4);
-    if (T[1] in ['0'..'9']) and (T[2] in ['0'..'9']) and
-       (T[3] in ['0'..'9']) and (T[4] in ['0'..'9']) then
+    DirLic := DetectLicenseType(DirLicFile);
+    if DirLic <> ltUnknown then
     begin
-      AYear := StrToIntDef(T, 0);
-      if AYear >= 1900 then
-      begin
-        Result := True;
-        Exit;
-      end;
-    end;
-  end;
-end;
-
-function LooksLikeCopyrightLine(const S: string): Boolean;
-var
-  L: string;
-begin
-  L := LowerCase(S);
-  Result := (Pos('copyright', L) > 0) or (Pos('(c)', L) > 0) or (Pos('©', L) > 0);
-end;
-
-function IsBlockCommentStart(const S: string): Boolean;
-begin
-  Result := (Pos('{', S) > 0) or (Pos('(*', S) > 0);
-end;
-
-function ScanPasFile(const AFileName: string): TFileResult;
-var
-  Lines: TStringList;
-  I, MaxLine, Y: Integer;
-  S: string;
-begin
-  FillChar(Result, SizeOf(Result), 0);
-  Result.FileName := AFileName;
-  Result.Status := fsError;
-  Result.MissingCopyright := True;
-  Result.ExistingCopyrightLineIndex := -1;
-
-  Lines := TStringList.Create;
-  try
-    Lines.LoadFromFile(AFileName);
-    MaxLine := Min(CScanLineLimit, Lines.Count);
-
-    for I := 0 to MaxLine - 1 do
-    begin
-      S := Lines[I];
-      if LooksLikeCopyrightLine(S) then
-      begin
-        Result.FoundCopyright := True;
-        Result.MissingCopyright := False;
-        Result.ExistingCopyrightLineIndex := I;
-
-        if ExtractYear(S, Y) then
-        begin
-          Result.FoundYear := True;
-          Result.YearValue := Y;
-          Result.NeedsYearUpdate := (Y <> GCurrentYear);
-          if Result.NeedsYearUpdate then
-            Result.Status := fsWarning
-          else
-            Result.Status := fsOk;
-        end
-        else
-        begin
-          Result.FoundYear := False;
-          Result.NeedsYearUpdate := True;
-          Result.Status := fsWarning;
-        end;
-
-        if IsBlockCommentStart(S) then
-          Result.OriginalHeaderStyle := 'block'
-        else
-          Result.OriginalHeaderStyle := 'line';
-        Exit;
-      end;
-    end;
-
-    Result.Status := fsError;
-    Result.MissingCopyright := True;
-  finally
-    Lines.Free;
-  end;
-end;
-
-function ReplaceLastYear(const S: string; NewYear: Integer): string;
-var
-  I: Integer;
-  T: string;
-begin
-  Result := S;
-  for I := Length(S) - 3 downto 1 do
-  begin
-    T := Copy(S, I, 4);
-    if (T[1] in ['0'..'9']) and (T[2] in ['0'..'9']) and
-       (T[3] in ['0'..'9']) and (T[4] in ['0'..'9']) then
-    begin
-      Result := Copy(S, 1, I - 1) + IntToStr(NewYear) + Copy(S, I + 4, MaxInt);
+      AEffectiveLicense := DirLic;
       Exit;
     end;
   end;
-end;
 
-function NormalizeTemplate(const S: string): string;
-begin
-  Result := StringReplace(S, #13#10, LineEnding, [rfReplaceAll]);
-  Result := StringReplace(Result, #10, LineEnding, [rfReplaceAll]);
-  Result := StringReplace(Result, #13, LineEnding, [rfReplaceAll]);
-end;
-
-procedure InsertHeaderTemplate(Lines: TStrings; TemplateText: string);
-var
-  T: TStringList;
-  I: Integer;
-begin
-  TemplateText := StringReplace(TemplateText, '$year', IntToStr(GCurrentYear), []);
-
-  T := TStringList.Create;
-  try
-    T.Text := NormalizeTemplate(TemplateText);
-    while (T.Count > 0) and (Trim(T[T.Count - 1]) = '') do
-      T.Delete(T.Count - 1);
-
-    for I := T.Count - 1 downto 0 do
-      Lines.Insert(0, T[I]);
-
-    if (T.Count > 0) then
-      Lines.Insert(T.Count, '');
-  finally
-    T.Free;
-  end;
-end;
-
-procedure ApplyFix(const AFileName: string; const Scan: TFileResult; CopyrightTemplate: string);
-var
-  Lines: TStringList;
-begin
-  Lines := TStringList.Create;
-  try
-    Lines.LoadFromFile(AFileName);
-
-    if Scan.FoundCopyright then
-    begin
-      if Scan.NeedsYearUpdate and (Scan.ExistingCopyrightLineIndex >= 0) then
-      begin
-        if Scan.FoundYear then
-          Lines[Scan.ExistingCopyrightLineIndex] :=
-            ReplaceLastYear(Lines[Scan.ExistingCopyrightLineIndex], GCurrentYear);
-        Lines.SaveToFile(AFileName);
-        WriteLn('[INFO] Updated copyright year ', AFileName);
-      end;
-    end
-    else
-    begin
-      InsertHeaderTemplate(Lines, CopyrightTemplate);
-      Lines.SaveToFile(AFileName);
-      WriteLn('[INFO] Added copyright header ', AFileName);
-    end;
-  finally
-    Lines.Free;
-  end;
+  AEffectiveLicense := ARootLicense;
 end;
 
 procedure DoCheck;
@@ -464,12 +172,15 @@ var
   I: Integer;
   R: TFileResult;
   HadProblem: Boolean;
-  OutText: String;
+  OutText: string;
+  RootLicFile: string;
+  RootLicense, EffectiveLicense: TLicenseType;
+  HasDirLicense: Boolean;
 begin
   Files := TStringList.Create;
   try
     if not GetTrackedPasFiles(Files, OutText) then
-      raise Exception.Create('Failed to list git tracked Pascal files: '+ Trim(OutText));
+      raise Exception.Create('Failed to list git tracked Pascal files: ' + Trim(OutText));
 
     Blacklist := LoadBlacklist(ResolveBlacklistFile);
     try
@@ -478,12 +189,27 @@ begin
       Blacklist.Free;
     end;
 
+    RootLicFile := FindLicenseFile('.');
+    if RootLicFile <> '' then
+      RootLicense := DetectLicenseType(RootLicFile)
+    else
+    begin
+      RootLicense := ltUnknown;
+      WriteLn('[WARNING] No license file found in project root');
+    end;
+
     HadProblem := False;
 
     for I := 0 to Files.Count - 1 do
     begin
-      R := ScanPasFile(Files[I]);
+      R := ScanPasFile(Files[I], GCurrentYear);
+
+      ResolveFileLicense(Files[I], RootLicFile, RootLicense,
+                         EffectiveLicense, HasDirLicense);
+
       Write('[INFO] Found ', Files[I]);
+      if EffectiveLicense <> ltUnknown then
+        Write(' [', LicenseShortName(EffectiveLicense), ']');
 
       case R.Status of
         fsOk:
@@ -499,6 +225,12 @@ begin
             HadProblem := True;
           end;
       end;
+
+      if HasDirLicense and (EffectiveLicense <> ltUnknown) and
+         (RootLicense <> ltUnknown) and (EffectiveLicense <> RootLicense) then
+        WriteLn('[WARNING] ', Files[I], ': directory license (',
+                LicenseShortName(EffectiveLicense), ') differs from root (',
+                LicenseShortName(RootLicense), ')');
     end;
 
     if HadProblem then
@@ -506,20 +238,6 @@ begin
   finally
     Files.Free;
   end;
-end;
-
-function LoadCopyrightTemplate(AFileName: String): String;
-var
-  Stream: TStringStream;
-begin
-  try
-    Stream := TStringStream.Create;
-    Stream.LoadFromFile(AFileName);
-    Result := Stream.DataString;
-  except
-    Result := '';
-  end;
-  Stream.Free;
 end;
 
 procedure DoFix;
@@ -532,6 +250,9 @@ var
   CopyrightTemplate, OutText: string;
   CopyrightTemplateNeeded: Boolean = False;
   Author: UTF8String;
+  RootLicFile: string;
+  RootLicense, EffectiveLicense: TLicenseType;
+  HasDirLicense: Boolean;
 begin
   if not IsGitRepo then
   begin
@@ -554,7 +275,7 @@ begin
   Files := TStringList.Create;
   try
     if not GetTrackedPasFiles(Files, OutText) then
-      raise Exception.Create('Failed to list git tracked Pascal files: '+ Trim(OutText));
+      raise Exception.Create('Failed to list git tracked Pascal files: ' + Trim(OutText));
 
     Blacklist := LoadBlacklist(ResolveBlacklistFile);
     try
@@ -563,13 +284,29 @@ begin
       Blacklist.Free;
     end;
 
+    RootLicFile := FindLicenseFile('.');
+    if RootLicFile <> '' then
+      RootLicense := DetectLicenseType(RootLicFile)
+    else
+    begin
+      RootLicense := ltUnknown;
+      WriteLn('[WARNING] No license file found in project root');
+    end;
+
     SetLength(Results, Files.Count);
     HadProblem := False;
 
     for I := 0 to Files.Count - 1 do
     begin
-      Results[I] := ScanPasFile(Files[I]);
-      WriteLn('[INFO] Found ', Files[I]);
+      Results[I] := ScanPasFile(Files[I], GCurrentYear);
+
+      ResolveFileLicense(Files[I], RootLicFile, RootLicense,
+                         EffectiveLicense, HasDirLicense);
+
+      Write('[INFO] Found ', Files[I]);
+      if EffectiveLicense <> ltUnknown then
+        Write(' [', LicenseShortName(EffectiveLicense), ']');
+      WriteLn;
 
       case Results[I].Status of
         fsOk:
@@ -585,58 +322,66 @@ begin
             HadProblem := True;
           end;
       end;
+
+      if HasDirLicense and (EffectiveLicense <> ltUnknown) and
+         (RootLicense <> ltUnknown) and (EffectiveLicense <> RootLicense) then
+        WriteLn('[WARNING] ', Files[I], ': directory license (',
+                LicenseShortName(EffectiveLicense), ') differs from root (',
+                LicenseShortName(RootLicense), ')');
     end;
 
     if HadProblem then
     begin
       CopyrightTemplate := GetEnvironmentVariable('PASBUILD_COPYRIGHT_FILE');
       if CopyrightTemplate = '' then
-        CopyrightTemplate:= 'resources' + PathDelim + 'copyright_stub.txt';
+        CopyrightTemplate := 'resources' + PathDelim + 'copyright_stub.txt';
 
       if not FileExists(CopyrightTemplate) then
-        CopyrightTemplate:=''
+        CopyrightTemplate := ''
       else
       begin
         WriteLn('[INFO] Using template in ' + CopyrightTemplate + ' (if needed)');
-        CopyrightTemplate:=LoadCopyrightTemplate(CopyrightTemplate);
-        if (CopyrightTemplate = '') or (Trim(CopyrightTemplate) = '') or (Pos('copyright', LowerCase(CopyrightTemplate)) = 0)then
+        CopyrightTemplate := LoadCopyrightTemplate(CopyrightTemplate);
+        if (CopyrightTemplate = '') or (Trim(CopyrightTemplate) = '') or
+           (Pos('copyright', LowerCase(CopyrightTemplate)) = 0) then
         begin
           WriteLn('[WARNING] Failed to read stub file or it''s empty or it doesn''t seem to have a copyright notice');
           CopyrightTemplate := '';
         end;
       end;
 
-
       for I := 0 to High(Results) do
-        if Results[I].MissingCopyright {or Results[I].NeedsYearUpdate} then
-          CopyrightTemplateNeeded:=True;
+        if Results[I].MissingCopyright then
+          CopyrightTemplateNeeded := True;
 
       WriteLn('[INFO] $who and $year (lowercase) can be used in the copyright stub file. If they exist they will be replaced.');
-      Writeln('[INFO] Set Env variable PASBUILD_COPYRIGHT_AUTHOR to set $who. Year is replaced with the current year.');
+      WriteLn('[INFO] Set Env variable PASBUILD_COPYRIGHT_AUTHOR to set $who. Year is replaced with the current year.');
 
       if not CopyrightTemplateNeeded and (CopyrightTemplate = '') then
         WriteLn('[WARNING] Env variable PASBUILD_COPYRIGHT_FILE isn''t set and/or resources' + PathDelim + 'copyright_stub.txt doesn''t exist')
-      else if CopyrightTemplate = '' then begin
+      else if CopyrightTemplate = '' then
+      begin
         WriteLn('[ERROR] Env variable PASBUILD_COPYRIGHT_FILE isn''t set and/or resources' + PathDelim + 'copyright_stub.txt doesn''t exist');
         WriteLn('[ERROR] Need Copyright file!');
         Halt(1);
       end;
     end;
 
-    Author := GetEnvironmentVariable(UTF8String('PASBUILD_COPYRIGHT_AUTHOR'));
+    Author := ResolveAuthor(RootLicFile);
 
     if CopyrightTemplateNeeded and (Pos('$who', CopyrightTemplate) <> 0) and (Author = '') then
     begin
-      WriteLn('[ERROR] Copyright file has $who but PASBUILD_COPYRIGHT_AUTHOR env variable not set!');
+      WriteLn('[ERROR] Copyright file has $who but no author found.',
+              ' Set PASBUILD_COPYRIGHT_AUTHOR or add a copyright line to the root license file.');
       Halt(1);
     end
     else
-      CopyrightTemplate:=StringReplace(CopyrightTemplate, '$who', Author, [rfReplaceAll]);
+      CopyrightTemplate := StringReplace(CopyrightTemplate, '$who', Author, [rfReplaceAll]);
 
     for I := 0 to High(Results) do
     begin
       if Results[I].FoundCopyright and Results[I].NeedsYearUpdate then
-        ApplyFix(Results[I].FileName, Results[I], CopyrightTemplate)
+        ApplyFix(Results[I].FileName, Results[I], CopyrightTemplate, GCurrentYear)
       else if Results[I].MissingCopyright then
       begin
         if CopyrightTemplate = '' then
@@ -644,9 +389,107 @@ begin
           WriteLn('[ERROR] PASBUILD_COPYRIGHT_FILE must be set to the literal contents of the copyright message to place at the top of the Pascal file, including comment marks');
           Halt(1);
         end;
-        ApplyFix(Results[I].FileName, Results[I], CopyrightTemplate);
+        ApplyFix(Results[I].FileName, Results[I], CopyrightTemplate, GCurrentYear);
       end;
     end;
+  finally
+    Files.Free;
+  end;
+end;
+
+{ Returns the author name to substitute for $who in templates.
+  Tries PASBUILD_COPYRIGHT_AUTHOR first; falls back to the copyright line
+  in the root license file and emits an [INFO] message when that is used. }
+function ResolveAuthor(const ARootLicFile: string): string;
+begin
+  Result := GetEnvironmentVariable('PASBUILD_COPYRIGHT_AUTHOR');
+  if (Result = '') and (ARootLicFile <> '') then
+  begin
+    Result := ExtractAuthorFromLicenseFile(ARootLicFile);
+    if Result <> '' then
+      WriteLn('[INFO] Using author "', Result, '" from ', ARootLicFile);
+  end;
+end;
+
+procedure DoChangeLicense(const AStubFile: string);
+var
+  Files: TStringList;
+  Blacklist: TStringList;
+  Results: array of TFileResult;
+  I: Integer;
+  CopyrightTemplate, OutText: string;
+  Author: string;
+  RootLicFile: string;
+begin
+  if not FileExists('project.xml') then
+  begin
+    WriteLn('[ERROR] --change-license must be run from the project root (project.xml not found)');
+    Halt(1);
+  end;
+
+  if not IsGitRepo then
+  begin
+    WriteLn('[ERROR] Not a git repository');
+    Halt(1);
+  end;
+
+  if HasStagedChanges then
+  begin
+    WriteLn('[ERROR] Git repository has staged but uncommitted changes');
+    Halt(1);
+  end;
+
+  if HasUnstagedChanges then
+  begin
+    WriteLn('[ERROR] Git repository has unstaged changes');
+    Halt(1);
+  end;
+
+  if not FileExists(AStubFile) then
+  begin
+    WriteLn('[ERROR] Stub file not found: ', AStubFile);
+    Halt(1);
+  end;
+
+  CopyrightTemplate := LoadCopyrightTemplate(AStubFile);
+  if (Trim(CopyrightTemplate) = '') or (Pos('copyright', LowerCase(CopyrightTemplate)) = 0) then
+  begin
+    WriteLn('[ERROR] Stub file is empty or contains no copyright notice: ', AStubFile);
+    Halt(1);
+  end;
+
+  RootLicFile := FindLicenseFile('.');
+  Author := ResolveAuthor(RootLicFile);
+
+  if Pos('$who', CopyrightTemplate) <> 0 then
+  begin
+    if Author = '' then
+    begin
+      WriteLn('[ERROR] Template contains $who but no author found.',
+              ' Set PASBUILD_COPYRIGHT_AUTHOR or add a copyright line to the root license file.');
+      Halt(1);
+    end;
+    CopyrightTemplate := StringReplace(CopyrightTemplate, '$who', Author, [rfReplaceAll]);
+  end;
+
+  Files := TStringList.Create;
+  try
+    if not GetTrackedPasFiles(Files, OutText) then
+      raise Exception.Create('Failed to list git tracked Pascal files: ' + Trim(OutText));
+
+    Blacklist := LoadBlacklist(ResolveBlacklistFile);
+    try
+      FilterBlacklisted(Files, Blacklist);
+    finally
+      Blacklist.Free;
+    end;
+
+    SetLength(Results, Files.Count);
+    for I := 0 to Files.Count - 1 do
+      Results[I] := ScanPasFile(Files[I], GCurrentYear);
+
+    for I := 0 to High(Results) do
+      ApplyChangeLicense(Results[I].FileName, Results[I], CopyrightTemplate, GCurrentYear);
   finally
     Files.Free;
   end;
@@ -667,6 +510,18 @@ begin
       InstallPlugin;
       Halt(0);
     end;
+
+    if ParamStr(1) = '--change-license' then
+    begin
+      if ParamCount < 2 then
+      begin
+        WriteLn('[ERROR] --change-license requires a stub file argument');
+        WriteLn('[INFO]  Usage: pasbuild-copyright --change-license <stub-file>');
+        Halt(1);
+      end;
+      DoChangeLicense(ParamStr(2));
+      Halt(0);
+    end;
   end;
 end;
 
@@ -677,7 +532,7 @@ begin
   try
     case DetectMode of
       pmCheck: DoCheck;
-      pmFix: DoFix;
+      pmFix:   DoFix;
     else
       begin
         WriteLn('[ERROR] Unknown runtime mode. Rename executable to pasbuild-copyright-check or pasbuild-copyright-fix');
@@ -686,11 +541,10 @@ begin
       end;
     end;
   except
-    on e: Exception do
+    on E: Exception do
     begin
-      WriteLn('[ERROR] '+ E.Message+'❌');
+      WriteLn('[ERROR] ' + E.Message + '❌');
       Halt(1);
     end;
-
   end;
 end.
