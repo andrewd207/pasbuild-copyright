@@ -51,6 +51,9 @@ Path to the copyright template file to use when inserting a new header. If not s
 `PASBUILD_COPYRIGHT_AUTHOR`::
 The author name substituted for `$who` in the template file. Required when the template contains `$who`.
 
+`PASBUILD_COPYRIGHT_BLACKLIST`::
+Path to the blacklist file. If not set, the plugin falls back to `resources/copyright_blacklist.txt` in the current directory. If the file does not exist no files are excluded.
+
 == Template file
 
 The template file is a plain text file containing the full copyright block to prepend to a Pascal file, including comment delimiters. Two variables are substituted at runtime:
@@ -73,6 +76,29 @@ The file `resources/copyright_stub.txt` in this repository is an example:
 ----
 
 Copy and adapt it for your own project, then point `PASBUILD_COPYRIGHT_FILE` at it.
+
+== Blacklist file
+
+The blacklist file lists regular expression patterns (one per line) matched against the file path. Any file whose path matches a pattern is skipped entirely — no check or fix is applied.
+
+Path separators are normalised to `/` before matching, so patterns only need to use `/` regardless of whether the OS uses `/` or `\`.
+
+Lines starting with `//` or `#` are treated as comments and ignored, as are blank lines. An invalid regex pattern produces a `[WARNING]` and is skipped.
+
+The default location is `resources/copyright_blacklist.txt` in the current directory. Set `PASBUILD_COPYRIGHT_BLACKLIST` to use a different path. If the file does not exist, no files are excluded.
+
+Example blacklist:
+[source]
+----
+// ignore all files under a vendor directory (works on both / and \ systems)
+vendor/
+
+# ignore generated files in a specific directory
+src/generated/.*\.pas$
+
+# ignore a single file by exact path
+src/main/pascal/GeneratedCode\.pas$
+----
 
 == Year range limitation
 
