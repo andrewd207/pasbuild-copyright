@@ -83,7 +83,7 @@ The blacklist file lists regular expression patterns (one per line) matched agai
 
 Path separators are normalised to `/` before matching, so patterns only need to use `/` regardless of whether the OS uses `/` or `\`.
 
-Lines starting with `//` or `#` are treated as comments and ignored, as are blank lines. An invalid regex pattern produces a `[WARNING]` and is skipped.
+Lines starting with `//` or `#` are treated as comments and ignored, as are blank lines. Invalid regex patterns are skipped.
 
 The default location is `resources/copyright_blacklist.txt` in the current directory. Set `PASBUILD_COPYRIGHT_BLACKLIST` to use a different path. If the file does not exist, no files are excluded.
 
@@ -99,6 +99,60 @@ src/generated/.*\.pas$
 # ignore a single file by exact path
 src/main/pascal/GeneratedCode\.pas$
 ----
+
+== Standalone usage
+
+When run directly (outside of pasbuild) the binary accepts explicit command-line arguments:
+
+`--install-plugin`::
+Copies the binary into the pasbuild plugins directory as both `pasbuild-copyright-check` and `pasbuild-copyright-fix`.
+
+`--change-license <stub-file>`::
+Replaces the copyright header in every git-tracked `.pas` file with a fresh one rendered from `<stub-file>`. Must be run from the project root (the directory that contains `project.xml`). Requires a completely clean git working tree — no staged or unstaged changes. The same `$year` and `$who` variables are supported as in the template file.
++
+[source,shell]
+----
+./target/pasbuild-copyright --change-license resources/new_copyright_stub.txt
+----
++
+For files whose header is a block comment (`{...}` or `(*...*)`), the entire block is removed and replaced. For line-comment headers (`//`), only the copyright line itself is replaced.
+
+== Author auto-detection
+
+When `$who` is used in a template and `PASBUILD_COPYRIGHT_AUTHOR` is not set, the plugin looks for a copyright line in the root license file (e.g. `LICENSE`) and extracts the author name from it:
+
+[source]
+----
+Copyright (c) 2026 Andrew Haines   →   author = "Andrew Haines"
+Copyright (c) 2022-2026, Corp Ltd  →   author = "Corp Ltd"
+----
+
+== License detection
+
+The plugin scans for a license file in each file's directory and in the project root. Recognised file names: `LICENSE`, `LICENSE.txt`, `LICENSE.md`, `LICENSE.rst`, `LICENCE`, `LICENCE.txt`, `LICENCE.md`, `COPYING`, `COPYING.txt`, `COPYING.lesser`, `COPYRIGHT`.
+
+The detected license type is shown in brackets after each filename, e.g. `[BSD-3]`. Recognised license types and their display names:
+
+[cols="1,1"]
+|===
+|License |Display
+
+|MIT License |`MIT`
+|ISC License |`ISC`
+|BSD 2-Clause |`BSD-2`
+|BSD 3-Clause |`BSD-3`
+|Apache 2.0 |`Apache-2`
+|Mozilla Public License 2.0 |`MPL-2`
+|GNU LGPL v2/v2.1 |`LGPL-2`
+|GNU LGPL v3 |`LGPL-3`
+|GNU GPL v2 |`GPL-2`
+|GNU GPL v3 |`GPL-3`
+|GNU AGPL v3 |`AGPL-3`
+|Proprietary (inferred) |`Proprietary`
+|Unrecognised |_(not shown)_
+|===
+
+A warning is emitted when a subdirectory contains its own license file whose type differs from the root license, and when no license file is found in the project root at all.
 
 == Year handling
 

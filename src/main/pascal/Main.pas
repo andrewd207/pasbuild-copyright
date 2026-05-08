@@ -240,6 +240,17 @@ begin
   end;
 end;
 
+function ResolveAuthor(const ARootLicFile: string): string;
+begin
+  Result := GetEnvironmentVariable('PASBUILD_COPYRIGHT_AUTHOR');
+  if (Result = '') and (ARootLicFile <> '') then
+  begin
+    Result := ExtractAuthorFromLicenseFile(ARootLicFile);
+    if Result <> '' then
+      WriteLn('[INFO] Using author "', Result, '" from ', ARootLicFile);
+  end;
+end;
+
 procedure DoFix;
 var
   Files: TStringList;
@@ -394,20 +405,6 @@ begin
     end;
   finally
     Files.Free;
-  end;
-end;
-
-{ Returns the author name to substitute for $who in templates.
-  Tries PASBUILD_COPYRIGHT_AUTHOR first; falls back to the copyright line
-  in the root license file and emits an [INFO] message when that is used. }
-function ResolveAuthor(const ARootLicFile: string): string;
-begin
-  Result := GetEnvironmentVariable('PASBUILD_COPYRIGHT_AUTHOR');
-  if (Result = '') and (ARootLicFile <> '') then
-  begin
-    Result := ExtractAuthorFromLicenseFile(ARootLicFile);
-    if Result <> '' then
-      WriteLn('[INFO] Using author "', Result, '" from ', ARootLicFile);
   end;
 end;
 

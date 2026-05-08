@@ -225,8 +225,6 @@ begin
   end;
 end;
 
-{ Scans backward from ACopyrightLine to find the line that opens the
-  enclosing block comment ({ or (*). Returns ACopyrightLine if none found. }
 function FindBlockStart(Lines: TStrings; ACopyrightLine: Integer): Integer;
 begin
   Result := ACopyrightLine;
@@ -236,8 +234,6 @@ begin
     Dec(Result);
 end;
 
-{ Returns the line index of the closing delimiter (} or *)) for the block
-  comment that opens on AStartLine. Handles single-line blocks. }
 function FindBlockEnd(Lines: TStrings; AStartLine: Integer): Integer;
 var
   IsParenStar: Boolean;
