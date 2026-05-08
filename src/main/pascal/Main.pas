@@ -3,7 +3,7 @@ program main;
 {$mode objfpc}{$H+}
 
 uses
-  Classes, SysUtils, StrUtils, Process, Math
+  Classes, SysUtils, StrUtils, Process, Math, DateUtils
   {$IFDEF UNIX}
   , BaseUnix
   {$ENDIF}
@@ -70,7 +70,7 @@ function ResolveInstalledFolder: string;
 var
   S, UserName: string;
 begin
-  S := IncludeTrailingPathDelimiter(CDefaultInstalledFolder) + 'plugins'+PathDelim;
+  S := IncludeTrailingPathDelimiter(CDefaultInstalledFolder) + 'plugins'+ PathDelim;
   UserName := GetEnvSmart('user');
   if UserName = '' then
     UserName := GetEnvSmart('username');
@@ -143,7 +143,7 @@ begin
   SetLength(Cmds, Length(Args));
   for I := 0 to High(Args) do
     Cmds[I] := Args[I];
-  Result := RunCommandInDir(GetCurrentDir, 'git', Cmds, OutputText, ExitCode, []) <> 0;
+  Result := RunCommandInDir(GetCurrentDir, 'git', Cmds, OutputText, ExitCode, []) = 0;
 end;
 
 function IsGitRepo: Boolean;
@@ -176,13 +176,13 @@ begin
             or (Trim(OutText) <> '');
 end;
 
-function GetTrackedPasFiles(AList: TStrings): Boolean;
+function GetTrackedPasFiles(AList: TStrings; var OutText: String): Boolean;
 var
-  OutText: string;
   ExitCode, I: Integer;
   Lines: TStringList;
   S: string;
 begin
+  OutText := '';
   AList.Clear;
   Result := RunGit(['ls-files', '*.pas'], OutText, ExitCode) and (ExitCode = 0);
   if not Result then
@@ -194,6 +194,7 @@ begin
     for I := 0 to Lines.Count - 1 do
     begin
       S := Trim(Lines[I]);
+      WriteLn('F: ', S);
       if S <> '' then
         AList.Add(S);
     end;
@@ -321,11 +322,13 @@ begin
   Result := StringReplace(Result, #13, LineEnding, [rfReplaceAll]);
 end;
 
-procedure InsertHeaderTemplate(Lines: TStrings; const TemplateText: string);
+procedure InsertHeaderTemplate(Lines: TStrings; TemplateText: string);
 var
   T: TStringList;
   I: Integer;
 begin
+  TemplateText := StringReplace(TemplateText, '$year', IntToStr(GCurrentYear), []);
+
   T := TStringList.Create;
   try
     T.Text := NormalizeTemplate(TemplateText);
@@ -342,7 +345,7 @@ begin
   end;
 end;
 
-procedure ApplyFix(const AFileName: string; const Scan: TFileResult; const CopyrightTemplate: string);
+procedure ApplyFix(const AFileName: string; const Scan: TFileResult; CopyrightTemplate: string);
 var
   Lines: TStringList;
 begin
@@ -378,11 +381,12 @@ var
   I: Integer;
   R: TFileResult;
   HadProblem: Boolean;
+  OutText: String;
 begin
   Files := TStringList.Create;
   try
-    if not GetTrackedPasFiles(Files) then
-      raise Exception.Create('Failed to list git tracked Pascal files');
+    if not GetTrackedPasFiles(Files, OutText) then
+      raise Exception.Create('Failed to list git tracked Pascal files: '+ Trim(OutText));
 
     HadProblem := False;
 
@@ -401,7 +405,7 @@ begin
           end;
         fsError:
           begin
-            WriteLn('[ERROR] No Copyright found ❌');
+            WriteLn('[ERROR] ↑ No Copyright notice found in file ↑ ❌');
             HadProblem := True;
           end;
       end;
@@ -414,13 +418,29 @@ begin
   end;
 end;
 
+function LoadCopyrightTemplate(AFileName: String): String;
+var
+  Stream: TStringStream;
+begin
+  try
+    Stream := TStringStream.Create;
+    Stream.LoadFromFile(AFileName);
+    Result := Stream.DataString;
+  except
+    Result := '';
+  end;
+  Stream.Free;
+end;
+
 procedure DoFix;
 var
   Files: TStringList;
   Results: array of TFileResult;
   I: Integer;
   HadProblem: Boolean;
-  CopyrightTemplate: string;
+  CopyrightTemplate, OutText: string;
+  CopyrightTemplateNeeded: Boolean = False;
+  Author: UnicodeString;
 begin
   if not IsGitRepo then
   begin
@@ -442,8 +462,8 @@ begin
 
   Files := TStringList.Create;
   try
-    if not GetTrackedPasFiles(Files) then
-      raise Exception.Create('Failed to list git tracked Pascal files');
+    if not GetTrackedPasFiles(Files, OutText) then
+      raise Exception.Create('Failed to list git tracked Pascal files: '+ Trim(OutText));
 
     SetLength(Results, Files.Count);
     HadProblem := False;
@@ -473,11 +493,43 @@ begin
     begin
       CopyrightTemplate := GetEnvironmentVariable('PASBUILD_COPYRIGHT_FILE');
       if CopyrightTemplate = '' then
+        CopyrightTemplate:= 'resources' + PathDelim + 'copyright_stub.txt';
+
+      if not FileExists(CopyrightTemplate) then
+        CopyrightTemplate:=''
+      else
       begin
-        WriteLn('[ERROR] PASBUILD_COPYRIGHT_FILE must be set to the literal contents of the copyright message to place at the top of the Pascal file, including comment marks');
-        for I := 0 to High(Results) do
-          if Results[I].MissingCopyright or Results[I].NeedsYearUpdate then
-            ;
+        WriteLn('[INFO] Using Copyright templae in ' + CopyrightTemplate + ' if needed');
+        CopyrightTemplate:=LoadCopyrightTemplate(CopyrightTemplate);
+        if (CopyrightTemplate = '') or (Trim(CopyrightTemplate) = '') or (Pos('copyright', LowerCase(CopyrightTemplate)) = 0)then
+        begin
+          WriteLn('[WARNING] Failed to read stub file or it''s empty or it doesn''t seem to have a copyright notice');
+          CopyrightTemplate := '';
+        end;
+      end;
+
+
+      for I := 0 to High(Results) do
+        if Results[I].MissingCopyright {or Results[I].NeedsYearUpdate} then
+          CopyrightTemplateNeeded:=True;
+
+      WriteLn('[INFO] $who and $year (lowercase) can be used in the copyright stub file. If they exist they will be replaced.');
+      Writeln('[INFO] Set Env variable PASBUILD_COPYRIGHT_AUTHOR to set $who. Year is replaced with the current year.');
+
+      if not CopyrightTemplateNeeded and (CopyrightTemplate = '') then
+        WriteLn('[WARNING] Env variable PASBUILD_COPYRIGHT_FILE isn''t set and/or resources' + PathDelim + 'copyright_stub.txt doesn''t exist')
+      else if CopyrightTemplate = '' then begin
+        WriteLn('[ERROR] Env variable PASBUILD_COPYRIGHT_FILE isn''t set and/or resources' + PathDelim + 'copyright_stub.txt doesn''t exist');
+        WriteLn('[ERROR] Need Copyright file!');
+        Halt(1);
+      end;
+
+      Author := GetEnvironmentVariable('PASBUILD_COPYRIGHT_AUTHOR');
+
+      if CopyrightTemplateNeeded and (Pos('$who', CopyrightTemplate) <> 0) and (Author = '') then
+      begin
+        WriteLn('[ERROR] Copyright file has $who but PASBUILD_COPYRIGHT_AUTHOR env variable not set!');
+        Halt(1);
       end;
     end;
 
@@ -522,15 +574,23 @@ begin
   GCurrentYear := StrToIntDef(FormatDateTime('yyyy', Date), 0);
 
   HandleSpecialArgs;
-
-  case DetectMode of
-    pmCheck: DoCheck;
-    pmFix: DoFix;
-  else
+  try
+    case DetectMode of
+      pmCheck: DoCheck;
+      pmFix: DoFix;
+    else
+      begin
+        WriteLn('[ERROR] Unknown runtime mode. Rename executable to pasbuild-copyright-check or pasbuild-copyright-fix');
+        WriteLn('[INFO] run with --install-plugin to create those and install them');
+        Halt(1);
+      end;
+    end;
+  except
+    on e: Exception do
     begin
-      WriteLn('[ERROR] Unknown runtime mode. Rename executable to pasbuild-copyright-check or pasbuild-copyright-fix');
-      WriteLn('[INFO] run with --install-plugin to create those and install them');
+      WriteLn('[ERROR] '+ E.Message+'❌');
       Halt(1);
     end;
+
   end;
 end.
