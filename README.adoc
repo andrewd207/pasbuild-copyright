@@ -77,6 +77,16 @@ The file `resources/copyright_stub.txt` in this repository is an example:
 
 Copy and adapt it for your own project, then point `PASBUILD_COPYRIGHT_FILE` at it.
 
+=== Auto-generated template
+
+If no template is configured and no `resources/copyright_stub.txt` exists, `copyright-fix` will attempt to build one automatically from the information it can discover:
+
+* The project name is read from `pasbuild resolve` (requires pasbuild to be on the `PATH`).
+* The SPDX license identifier is taken from the detected root license file.
+* The author is taken from `PASBUILD_COPYRIGHT_AUTHOR` or extracted from the root license file.
+
+The generated header follows the same format as the example above. Any field that cannot be determined is omitted. If the author cannot be resolved and `$who` would appear in the result, `copyright-fix` exits with an error.
+
 == Blacklist file
 
 The blacklist file lists regular expression patterns (one per line) matched against the file path. Any file whose path matches a pattern is skipped entirely — no check or fix is applied.

@@ -12,7 +12,7 @@ program main;
 {$mode objfpc}{$H+}
 
 uses
-  Classes, SysUtils, StrUtils, DateUtils,
+  Classes, SysUtils, StrUtils, DateUtils, Process, fpjson, jsonparser,
   UGitUtils, UBlacklist, UCopyrightScanner, ULicenseDetect
   {$IFDEF UNIX}
   , BaseUnix
@@ -240,6 +240,60 @@ begin
   end;
 end;
 
+function GetProjectName: string;
+var
+  OutText: string;
+  ExitCode: Integer;
+  Data: TJSONData;
+  ProjectData: TJSONData;
+begin
+  Result := '';
+  if RunCommandInDir(GetCurrentDir, 'pasbuild', ['resolve'], OutText, ExitCode, []) <> 0 then
+    Exit;
+  if ExitCode <> 0 then
+    Exit;
+  try
+    Data := GetJSON(Trim(OutText));
+    try
+      if not (Data is TJSONObject) then
+        Exit;
+      ProjectData := TJSONObject(Data).Find('project');
+      if (ProjectData <> nil) and (ProjectData is TJSONObject) then
+        Result := TJSONObject(ProjectData).Get('name', '');
+    finally
+      Data.Free;
+    end;
+  except
+    Result := '';
+  end;
+end;
+
+function BuildAutoTemplate(const AProjectName: string; ALicenseType: TLicenseType): string;
+var
+  Lines: TStringList;
+  SPDX: string;
+begin
+  SPDX := LicenseSPDXIdentifier(ALicenseType);
+  Lines := TStringList.Create;
+  try
+    Lines.Add('{');
+    if AProjectName <> '' then
+      Lines.Add('  This file is part of the ' + AProjectName + ' project.');
+    Lines.Add('  Copyright (c) $year $who');
+    if SPDX <> '' then
+    begin
+      Lines.Add('');
+      Lines.Add('  SPDX-License-Identifier: ' + SPDX);
+      Lines.Add('');
+      Lines.Add('  Licensed under the ' + SPDX + ' License. See LICENSE file for details.');
+    end;
+    Lines.Add('}');
+    Result := Lines.Text;
+  finally
+    Lines.Free;
+  end;
+end;
+
 function ResolveAuthor(const ARootLicFile: string): string;
 begin
   Result := GetEnvironmentVariable('PASBUILD_COPYRIGHT_AUTHOR');
@@ -304,6 +358,8 @@ begin
       WriteLn('[WARNING] No license file found in project root');
     end;
 
+    Author := ResolveAuthor(RootLicFile);
+
     SetLength(Results, Files.Count);
     HadProblem := False;
 
@@ -361,6 +417,10 @@ begin
         end;
       end;
 
+      // No explicit template — try auto-generating from project and license info
+      if CopyrightTemplate = '' then
+        CopyrightTemplate := BuildAutoTemplate(GetProjectName, RootLicense);
+
       for I := 0 to High(Results) do
         if Results[I].MissingCopyright then
           CopyrightTemplateNeeded := True;
@@ -377,8 +437,6 @@ begin
         Halt(1);
       end;
     end;
-
-    Author := ResolveAuthor(RootLicFile);
 
     if CopyrightTemplateNeeded and (Pos('$who', CopyrightTemplate) <> 0) and (Author = '') then
     begin

@@ -40,6 +40,9 @@ function DetectLicenseType(const AFileName: string): TLicenseType;
 { Short display name for use in log output, e.g. 'BSD-3', 'MIT', '?'. }
 function LicenseShortName(ALicense: TLicenseType): string;
 
+{ SPDX identifier string, e.g. 'BSD-3-Clause', 'MIT'. Returns '' for unknown/proprietary. }
+function LicenseSPDXIdentifier(ALicense: TLicenseType): string;
+
 { Reads the license file and extracts the author name from its copyright line.
   Looks for the rightmost year >= 1900 and returns everything after it.
   Returns '' if no such line is found. }
@@ -133,6 +136,25 @@ begin
      (Pos('redistribution', Lower) = 0) and
      (Pos('permission is hereby granted', Lower) = 0) then
     Exit(ltProprietaryLike);
+end;
+
+function LicenseSPDXIdentifier(ALicense: TLicenseType): string;
+begin
+  case ALicense of
+    ltMIT:    Result := 'MIT';
+    ltISC:    Result := 'ISC';
+    ltBSD2:   Result := 'BSD-2-Clause';
+    ltBSD3:   Result := 'BSD-3-Clause';
+    ltApache2: Result := 'Apache-2.0';
+    ltMPL2:   Result := 'MPL-2.0';
+    ltLGPL2:  Result := 'LGPL-2.1-or-later';
+    ltLGPL3:  Result := 'LGPL-3.0-or-later';
+    ltGPL2:   Result := 'GPL-2.0-only';
+    ltGPL3:   Result := 'GPL-3.0-only';
+    ltAGPL3:  Result := 'AGPL-3.0-only';
+  else
+    Result := '';
+  end;
 end;
 
 function LicenseShortName(ALicense: TLicenseType): string;
