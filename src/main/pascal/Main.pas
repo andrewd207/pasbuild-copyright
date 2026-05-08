@@ -1,3 +1,12 @@
+{
+  pasbuild-copyright - A plugin for pasbuild to help administer copyright
+  Copyright (c) 2026 Andrew Haines
+ 
+  SPDX-License-Identifier: BSD-3-Clause
+ 
+  Licensed under the BSD 3-Clause License. See LICENSE file for details.
+ }
+
 program main;
 
 {$mode objfpc}{$H+}
