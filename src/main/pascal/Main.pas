@@ -440,7 +440,7 @@ var
   HadProblem: Boolean;
   CopyrightTemplate, OutText: string;
   CopyrightTemplateNeeded: Boolean = False;
-  Author: UnicodeString;
+  Author: UTF8String;
 begin
   if not IsGitRepo then
   begin
@@ -499,7 +499,7 @@ begin
         CopyrightTemplate:=''
       else
       begin
-        WriteLn('[INFO] Using Copyright templae in ' + CopyrightTemplate + ' if needed');
+        WriteLn('[INFO] Using template in ' + CopyrightTemplate + ' (if needed)');
         CopyrightTemplate:=LoadCopyrightTemplate(CopyrightTemplate);
         if (CopyrightTemplate = '') or (Trim(CopyrightTemplate) = '') or (Pos('copyright', LowerCase(CopyrightTemplate)) = 0)then
         begin
@@ -523,15 +523,17 @@ begin
         WriteLn('[ERROR] Need Copyright file!');
         Halt(1);
       end;
-
-      Author := GetEnvironmentVariable('PASBUILD_COPYRIGHT_AUTHOR');
-
-      if CopyrightTemplateNeeded and (Pos('$who', CopyrightTemplate) <> 0) and (Author = '') then
-      begin
-        WriteLn('[ERROR] Copyright file has $who but PASBUILD_COPYRIGHT_AUTHOR env variable not set!');
-        Halt(1);
-      end;
     end;
+
+    Author := GetEnvironmentVariable(UTF8String('PASBUILD_COPYRIGHT_AUTHOR'));
+
+    if CopyrightTemplateNeeded and (Pos('$who', CopyrightTemplate) <> 0) and (Author = '') then
+    begin
+      WriteLn('[ERROR] Copyright file has $who but PASBUILD_COPYRIGHT_AUTHOR env variable not set!');
+      Halt(1);
+    end
+    else
+      CopyrightTemplate:=StringReplace(CopyrightTemplate, '$who', Author, [rfReplaceAll]);
 
     for I := 0 to High(Results) do
     begin
