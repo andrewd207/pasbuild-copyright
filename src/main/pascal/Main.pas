@@ -203,7 +203,6 @@ begin
     for I := 0 to Lines.Count - 1 do
     begin
       S := Trim(Lines[I]);
-      WriteLn('F: ', S);
       if S <> '' then
         AList.Add(S);
     end;
@@ -402,19 +401,19 @@ begin
     for I := 0 to Files.Count - 1 do
     begin
       R := ScanPasFile(Files[I]);
-      WriteLn('[INFO] Found ', Files[I]);
+      Write('[INFO] Found ', Files[I]);
 
       case R.Status of
         fsOk:
-          WriteLn('[INFO] Copyright exists and is current ✅');
+          WriteLn(' Is OK ✅');
         fsWarning:
           begin
-            WriteLn('[WARNING] Copyright exists but is not up to date ⚠️');
+            WriteLn(' Out of date: ', R.YearValue, ' ⚠️');
             HadProblem := True;
           end;
         fsError:
           begin
-            WriteLn('[ERROR] ↑ No Copyright notice found in file ↑ ❌');
+            WriteLn(' No Copyright notice found ❌');
             HadProblem := True;
           end;
       end;
