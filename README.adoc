@@ -1,0 +1,91 @@
+= pasbuild-copyright
+Andrew Haines
+:toc:
+:toc-placement: preamble
+
+A https://github.com/graemeg/PasBuild[pasbuild] plugin that checks and fixes copyright headers in Pascal (`.pas`) source files tracked by git.
+
+Project page: https://github.com/andrewd207/pasbuild-copyright
+
+== How it works
+
+Once installed, the plugin is invoked through pasbuild:
+
+[source,shell]
+----
+pasbuild copyright-check
+pasbuild copyright-fix
+----
+
+pasbuild discovers the plugin automatically from its plugin directory and dispatches to the appropriate mode.
+
+* `copyright-check` — scans all git-tracked `.pas` files and exits with a non-zero status if any file is missing a copyright header or has one with an out-of-date year.
+* `copyright-fix` — same scan, but automatically inserts missing headers or updates stale years in-place. Requires a clean git working tree (no staged or unstaged changes).
+
+The tool looks for a copyright line within the first 20 lines of each file. A line is recognised as a copyright if it contains the word `copyright`, `(c)`, or `©` (case-insensitive).
+
+== Installation
+
+Build the project with pasbuild, then run the resulting binary with `--install-plugin`:
+
+[source,shell]
+----
+./target/pasbuild-copyright --install-plugin
+----
+
+This copies the binary into the pasbuild plugins directory as both `pasbuild-copyright-check` and `pasbuild-copyright-fix`:
+
+[source]
+----
+~/.pasbuild/plugins/pasbuild-copyright-check
+~/.pasbuild/plugins/pasbuild-copyright-fix
+----
+
+After that, `pasbuild copyright-check` and `pasbuild copyright-fix` will work from any project directory.
+
+== Environment variables
+
+`PASBUILD_COPYRIGHT_FILE`::
+Path to the copyright template file to use when inserting a new header. If not set, the plugin falls back to `resources/copyright_stub.txt` in the current directory. The file must contain the word `copyright` (case-insensitive) or it will be rejected.
+
+`PASBUILD_COPYRIGHT_AUTHOR`::
+The author name substituted for `$who` in the template file. Required when the template contains `$who`.
+
+== Template file
+
+The template file is a plain text file containing the full copyright block to prepend to a Pascal file, including comment delimiters. Two variables are substituted at runtime:
+
+`$year`:: Replaced with the current four-digit year.
+`$who`:: Replaced with the value of `PASBUILD_COPYRIGHT_AUTHOR`.
+
+The file `resources/copyright_stub.txt` in this repository is an example:
+
+[source]
+----
+{
+  pasbuild-copyright - A plugin for pasbuild to help administer copyright
+  Copyright (c) $year $who
+
+  SPDX-License-Identifier: BSD-3-Clause
+
+  Licensed under the BSD 3-Clause License. See LICENSE file for details.
+ }
+----
+
+Copy and adapt it for your own project, then point `PASBUILD_COPYRIGHT_FILE` at it.
+
+== Year range limitation
+
+WARNING: Do not use a year range such as `Copyright 2022-2026` in your copyright header. The plugin extracts the first four-digit number (≥ 1900) it finds on the copyright line and replaces it with the current year. With a range, it will find and overwrite the start year, producing something like `Copyright 2026-2026` — and eventually `Copyright 2027-2026`.
+
+Use a single year in the header and let the plugin keep it up to date:
+
+[source]
+----
+Copyright (c) 2026 My Name       ✔
+Copyright (c) 2022-2026 My Name  ✘
+----
+
+== License
+
+BSD 3-Clause. See `LICENSE` for details.
